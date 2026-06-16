@@ -71,9 +71,15 @@ yandex-metrika-mcp
 
 The server speaks MCP over stdio. Logs go to stderr; stdout is reserved for JSON-RPC.
 
-## Hermes Agent setup
+## Optional: Hermes Agent integration
 
-Recommended: use a wrapper script so the token stays outside the MCP config (Hermes redacts `--env` values in `config.yaml` but passes them as the literal `***` to the subprocess, which would break the auth).
+If you use [Hermes Agent](https://hermes-agent.nousresearch.com), two extras ship with this repo.
+
+### MCP wrapper (recommended for Hermes)
+
+Hermes redacts `--env` values in `config.yaml` but passes them as the literal
+`***` to the subprocess, which would break the auth header. Use a wrapper
+script so the token stays outside the MCP config:
 
 ```bash
 cat > ~/.hermes/mcp-yandex-metrika-wrapper.sh <<'EOF'
@@ -91,10 +97,10 @@ hermes mcp add yandex-metrika --command ~/.hermes/mcp-yandex-metrika-wrapper.sh
 Put the token in `~/.hermes/.env`:
 
 ```bash
-YANDEX_METRIKA_TOKEN=your-yandex-oauth-token
+YANDEX_METRIKA_TOKEN="your-y...oken"
 ```
 
-## Hermes Skill
+### Companion skill
 
 A companion skill ships in [`skills/yandex-metrika-analytics/`](skills/yandex-metrika-analytics/).
 It wraps the 12 MCP tools with an analysis pattern: resolve `counter_id` via `list_counters` first,

@@ -84,11 +84,11 @@ For any non-trivial question:
 1. **Define the question** — drop, growth, quality, SEO, pages,
    conversions, campaign, report.
 2. **Resolve `counter_id`** with `list_counters` first. Do not guess.
-3. **Pick comparable periods** — same duration; never compare a full
+4. **Pick comparable periods** — same duration; never compare a full
    week to a 3-day window. Avoid weekday-vs-weekend unless the user
    asked for it. For "this week vs last week" use `compare_periods` with
-   `days_back` derived from current Omsk (UTC+6) date if no explicit
-   dates are given.
+   `days_back` derived from the user's local current date if no
+   explicit dates are given.
 4. **Choose metrics and dimensions** from the Yandex Metrika IDs (see
    reference list below). Use `ym:s:*` for session-level, `ym:pv:*` for
    pageview-level.
@@ -175,9 +175,10 @@ exact dates; use `days_back` only as a fallback.
 - **Bounce rate near 0 is suspicious** — usually means the counter has
   no non-bounce events, not "great engagement".
 - **Time-zone**: the server returns dates in the counter's configured
-  timezone. Convert mentally to the user's context. For a user in
-  Omsk (UTC+6) and a Moscow-timezoned counter, day boundaries differ
-  by 3 hours — say so when it matters.
+  timezone. When the counter's timezone differs from the user's
+  working timezone, day boundaries shift by the offset — say so
+  explicitly when it matters (week-over-week comparisons spanning the
+  boundary, partial-day reports, etc.).
 - **Yandex Metrika requires `Authorization: OAuth <token>`, not
   `Bearer`.** The MCP handles this internally; do not add a header
   override.
