@@ -9,46 +9,44 @@
 
 > **Languages**: [English](./README.md) · [Русский](./README.ru.md)
 >
-> **What this repo gives you**: a Yandex Metrika MCP server (data layer) **plus** a companion Hermes skill (analysis layer) — install both and an LLM agent becomes a Metrika analyst, not a Metrika data pipe.
+> **What this repository provides**: a read-only MCP server for Yandex Metrika (data layer) and a companion Hermes skill (analysis layer). Installing both enables an LLM agent to perform structured Yandex Metrika analysis: account discovery, period comparison, segment decomposition, and confidence-rated reporting.
 
 ## What's in the box
 
-This repository ships two pieces that work together. Neither is useful on its own.
+This repository ships two components intended to be used together. The MCP server provides the API surface; the skill provides the methodology that drives the API surface. Each component is of limited value on its own.
 
-| Layer | What it is | Where |
+| Layer | Description | Location |
 |---|---|---|
-| **MCP server** (`yandex-metrika`) | Speaks MCP over stdio, calls Yandex Metrika's official API with the correct `Authorization: OAuth <token>` header, returns raw JSON. 12 read-only tools, 4 runtime dependencies, no write access. | [`src/yandex_metrika_mcp/`](./src/yandex_metrika_mcp/) |
-| **Companion skill** (`yandex-metrika-analytics`) | A `SKILL.md` for [Hermes Agent](https://hermes-agent.nousresearch.com) that tells the LLM which tool to call in which order, how to compare periods, how to decompose a change into source / page / device, and how to present the answer in business terms (Суть / Цифры / Что делать). | [`skills/yandex-metrika-analytics/`](./skills/yandex-metrika-analytics/SKILL.md) |
+| **MCP server** (`yandex-metrika`) | Speaks MCP over stdio and calls the official Yandex Metrika API using the `Authorization: OAuth <token>` header. Exposes 12 read-only tools. 4 runtime dependencies. No write endpoints. | [`src/yandex_metrika_mcp/`](./src/yandex_metrika_mcp/) |
+| **Companion skill** (`yandex-metrika-analytics`) | A `SKILL.md` for [Hermes Agent](https://hermes-agent.nousresearch.com) that defines the analysis pattern: which tool to call, in what order, how to compare periods, how to decompose a change by source, page, or device, and how to present the result. | [`skills/yandex-metrika-analytics/`](./skills/yandex-metrika-analytics/SKILL.md) |
 
-**MCP without the skill** = 12 raw tools that an LLM has to learn on the fly, often producing bad outputs (e.g. comparing a full month to a partial one, declaring "SEO is bad" from a single number).
-**Skill without the MCP** = a methodology doc with no data behind it.
-**Both together** = a marketing analyst that reads Metrika.
+The MCP without the skill provides a flat tool surface with no analytical context, which can lead to incorrect conclusions (for example, comparing a full month against a partial one, or attributing a change to a single source without decomposition). The skill without the MCP has no access to live data. Together, they provide a complete analysis workflow.
 
-## What you can ask an agent with both installed
+## Example queries
 
-These are real question patterns the skill is designed to answer confidently:
+The following are representative question patterns the skill is designed to handle:
 
-- *"What happened with traffic on weltall.energy this week vs last week?"*
-- *"Conversions on the main goal fell 30% — find the culprit: source, page, or device?"*
-- *"Weekly executive report, format: Summary / Numbers / Next steps."*
-- *"Top 10 organic landing pages, with bounce rate and depth breakdown."*
-- *"Compare May vs June organic traffic, split by search engine."*
-- *"Blog SEO audit: which pages are losing positions and why?"*
-- *"Quality check: my traffic is up — is it real growth or bot/referral-spam?"*
+- Period-over-period traffic comparison with decomposition.
+- Goal conversion diagnostics by source, page, or device.
+- Weekly or monthly executive reports in a structured format.
+- Landing page analysis with bounce rate and depth breakdown.
+- Organic traffic comparison across search engines.
+- Content-level SEO diagnosis of ranking and traffic changes.
+- Traffic quality assessment, including bot and referral-spam filtering.
 
-The skill enforces a single rule across all of them: **never conclude from one metric**. It always pulls a comparable baseline, decomposes the change, checks quality, and gives a confidence label (high / medium / low).
+The skill enforces a single rule across all question types: conclusions must not be drawn from a single metric. Every analysis pulls a comparable baseline, decomposes the change, checks quality, and returns a confidence label (high, medium, or low).
 
 ## Why this exists
 
-A marketing agent usually needs:
+A marketing analysis agent typically needs the following capabilities:
 
-- **Discover** what counters, goals, segments, filters, grants, and labels are available.
-- **Run reports** with arbitrary metrics, dimensions, filters, and sorts.
-- **Slice over time** (day / hour / week / month).
-- **Drill down** into a single dimension value (e.g. what pages do Chrome users land on).
-- **Compare two periods** (week vs week, month vs month, this quarter vs last).
+- Discover what counters, goals, segments, filters, grants, and labels are available.
+- Run reports with arbitrary metrics, dimensions, filters, and sorts.
+- Slice results over time (day, hour, week, or month).
+- Drill down into a single dimension value.
+- Compare two periods of equal length.
 
-Other Yandex Metrika MCP servers either wrap every API endpoint at the cost of dozens of low-level tools and large models, or ship with the wrong auth header (`Bearer` instead of `OAuth`, which Yandex rejects). This server keeps the surface flat: **12 tools, 4 runtime dependencies, 1 auth scheme, no write access**.
+Existing Yandex Metrika MCP servers fall into one of two categories. The first wraps every API endpoint, which produces dozens of low-level tools and inflates the model's prompt. The second ships with the wrong authentication header (`Bearer` instead of `OAuth`), which Yandex rejects with HTTP 401. This server follows a different design: 12 tools, 4 runtime dependencies, 1 authentication scheme, read-only.
 
 ## Tools
 
@@ -145,10 +143,10 @@ The companion analysis skill ships in [`skills/yandex-metrika-analytics/`](./ski
 - Forces `list_counters` first — never guesses `counter_id`.
 - Picks comparable periods (same duration, same weekday pattern, explicit dates over `days_back` when the user named a period).
 - Decomposes changes by source / page / device / region / phrase.
-- Checks quality: bounce rate, time on site, depth, **conversion rate** — a traffic spike with collapsing CR is a problem, not a win.
-- Calls out time-zone quirks (counter timezone vs. user timezone, e.g. Omsk UTC+6 vs. Moscow).
-- Outputs in a consistent structure: **Суть** (one-sentence finding) / **Цифры** (supporting numbers) / **Что делать** (concrete next checks).
-- Adds a confidence label (high / medium / low) and states assumptions.
+- Checks quality: bounce rate, time on site, depth, and conversion rate. A traffic increase with a falling conversion rate indicates a quality problem, not a positive trend.
+- Handles time-zone differences between the counter and the user (for example, Omsk UTC+6 vs. a Moscow-timezoned counter).
+- Outputs in a consistent structure: a single-sentence finding, the supporting numbers, and concrete next steps.
+- Adds a confidence label (high, medium, or low) and states the underlying assumptions.
 
 **What the skill does NOT cover** (and what to use instead):
 
@@ -248,7 +246,7 @@ PYTHONPATH=src python tests/smoke_mcp.py
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Why a separate skill, not a smarter server.** The server has no business logic — it's a thin, predictable API wrapper. The skill carries the methodology and lives with the agent (Hermes loads it on demand). Same repo keeps the version coupling honest: when a tool signature changes, the skill can be updated in the same commit.
+**Design rationale.** The MCP server contains no business logic. It is a thin and predictable API wrapper. The skill contains the analytical methodology and is loaded on demand by the agent. Keeping both in the same repository ensures version coupling: when a tool signature changes, the corresponding skill updates ship in the same commit.
 
 ## Security notes
 
