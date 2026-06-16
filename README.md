@@ -1,6 +1,42 @@
 # yandex-metrika-mcp
 
-Read-only MCP server for Yandex Metrika. Small, dependency-minimal stdio wrapper around the official Yandex Metrika API. Designed for marketing analytics: a marketing agent can inspect account structure, run reports, slice by any dimension, and compare periods — all without learning the raw API.
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+[![MCP server](https://img.shields.io/badge/MCP-server-0ea5e9)](https://modelcontextprotocol.io)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue)](https://www.python.org)
+[![Tools: 12](https://img.shields.io/badge/tools-12-success)](./src/yandex_metrika_mcp/server.py)
+[![Runtime deps: 4](https://img.shields.io/badge/runtime_deps-4-success)](./pyproject.toml)
+[![Companion skill](https://img.shields.io/badge/Hermes-skill-7c3aed)](./skills/yandex-metrika-analytics/SKILL.md)
+
+> **Languages**: [English](./README.md) · [Русский](./README.ru.md)
+>
+> **What this repo gives you**: a Yandex Metrika MCP server (data layer) **plus** a companion Hermes skill (analysis layer) — install both and an LLM agent becomes a Metrika analyst, not a Metrika data pipe.
+
+## What's in the box
+
+This repository ships two pieces that work together. Neither is useful on its own.
+
+| Layer | What it is | Where |
+|---|---|---|
+| **MCP server** (`yandex-metrika`) | Speaks MCP over stdio, calls Yandex Metrika's official API with the correct `Authorization: OAuth <token>` header, returns raw JSON. 12 read-only tools, 4 runtime dependencies, no write access. | [`src/yandex_metrika_mcp/`](./src/yandex_metrika_mcp/) |
+| **Companion skill** (`yandex-metrika-analytics`) | A `SKILL.md` for [Hermes Agent](https://hermes-agent.nousresearch.com) that tells the LLM which tool to call in which order, how to compare periods, how to decompose a change into source / page / device, and how to present the answer in business terms (Суть / Цифры / Что делать). | [`skills/yandex-metrika-analytics/`](./skills/yandex-metrika-analytics/SKILL.md) |
+
+**MCP without the skill** = 12 raw tools that an LLM has to learn on the fly, often producing bad outputs (e.g. comparing a full month to a partial one, declaring "SEO is bad" from a single number).
+**Skill without the MCP** = a methodology doc with no data behind it.
+**Both together** = a marketing analyst that reads Metrika.
+
+## What you can ask an agent with both installed
+
+These are real question patterns the skill is designed to answer confidently:
+
+- *"What happened with traffic on weltall.energy this week vs last week?"*
+- *"Conversions on the main goal fell 30% — find the culprit: source, page, or device?"*
+- *"Weekly executive report, format: Summary / Numbers / Next steps."*
+- *"Top 10 organic landing pages, with bounce rate and depth breakdown."*
+- *"Compare May vs June organic traffic, split by search engine."*
+- *"Blog SEO audit: which pages are losing positions and why?"*
+- *"Quality check: my traffic is up — is it real growth or bot/referral-spam?"*
+
+The skill enforces a single rule across all of them: **never conclude from one metric**. It always pulls a comparable baseline, decomposes the change, checks quality, and gives a confidence label (high / medium / low).
 
 ## Why this exists
 
@@ -100,21 +136,40 @@ Put the token in `~/.hermes/.env`:
 YANDEX_METRIKA_TOKEN="your-y...oken"
 ```
 
-### Companion skill
+### Companion skill (the analysis layer)
 
-A companion skill ships in [`skills/yandex-metrika-analytics/`](skills/yandex-metrika-analytics/).
-It wraps the 12 MCP tools with an analysis pattern: resolve `counter_id` via `list_counters` first,
-pick comparable periods, decompose by source/page/device, check quality (bounce, duration, conversion),
-and present the answer in three blocks (Суть / Цифры / Что делать).
+The companion analysis skill ships in [`skills/yandex-metrika-analytics/`](./skills/yandex-metrika-analytics/) — same repo, no second install step. It is a `SKILL.md` for [Hermes Agent](https://hermes-agent.nousresearch.com) that the agent loads on demand.
 
-Install after the MCP:
+**What the skill does for the LLM:**
+
+- Forces `list_counters` first — never guesses `counter_id`.
+- Picks comparable periods (same duration, same weekday pattern, explicit dates over `days_back` when the user named a period).
+- Decomposes changes by source / page / device / region / phrase.
+- Checks quality: bounce rate, time on site, depth, **conversion rate** — a traffic spike with collapsing CR is a problem, not a win.
+- Calls out time-zone quirks (counter timezone vs. user timezone, e.g. Omsk UTC+6 vs. Moscow).
+- Outputs in a consistent structure: **Суть** (one-sentence finding) / **Цифры** (supporting numbers) / **Что делать** (concrete next checks).
+- Adds a confidence label (high / medium / low) and states assumptions.
+
+**What the skill does NOT cover** (and what to use instead):
+
+- Counter installation, GTM, event setup → use a generic `analytics` skill
+- Pure technical SEO crawl without traffic metrics → use `seo-audit` / `technical-seo-checker`
+- Paid ads account optimization with no site analytics involved → use a `ppc` skill
+- GA4 / Mixpanel / Segment — this is Yandex Metrika only
+
+**Install after the MCP:**
 
 ```bash
-hermes skills install https://raw.githubusercontent.com/ShalomGH/yandex-metrika-mcp/main/skills/yandex-metrika-analytics/SKILL.md
+# If you installed from PyPI / uv, the skill is not bundled — copy it manually:
+git clone https://github.com/ShalomGH/yandex-metrika-mcp.git
+cp yandex-metrika-mcp/skills/yandex-metrika-analytics/SKILL.md \
+   ~/.hermes/skills/marketing/yandex-metrika-analytics/SKILL.md
+# restart the agent session — the skill auto-loads
 ```
 
-The skill declares `metadata.hermes.requires_mcp: yandex-metrika` — Hermes will warn if the MCP
-is missing and the skill is loaded.
+If you installed from a local clone (`pip install -e .` from this repo), the skill file is already in the right place to symlink or copy.
+
+The skill declares `metadata.hermes.requires_mcp: yandex-metrika` in its frontmatter — Hermes will warn if the MCP is missing and the skill is loaded.
 
 ## Common metric and dimension names
 
@@ -164,6 +219,36 @@ python -m compileall src tests
 python -m pytest -q
 PYTHONPATH=src python tests/smoke_mcp.py
 ```
+
+## How the two layers fit together
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  User: "What happened with traffic this week?"              │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Companion skill (skills/yandex-metrika-analytics/SKILL.md) │
+│  • list_counters → pick counter                             │
+│  • compare_periods → week-over-week delta                   │
+│  • get_report (sources) → find the contributor              │
+│  • get_report (quality) → bounce, duration, conversion      │
+│  • synthesize → Суть / Цифры / Что делать + confidence      │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  MCP server (src/yandex_metrika_mcp/server.py)              │
+│  • 12 read-only tools                                       │
+│  • Authorization: OAuth <token>  (not Bearer — Yandex quirk)│
+│  • 4 runtime deps, ~800 LOC, stdio JSON-RPC                 │
+└──────────────────────────┬──────────────────────────────────┘
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Yandex Metrika API → JSON → back up the stack              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Why a separate skill, not a smarter server.** The server has no business logic — it's a thin, predictable API wrapper. The skill carries the methodology and lives with the agent (Hermes loads it on demand). Same repo keeps the version coupling honest: when a tool signature changes, the skill can be updated in the same commit.
 
 ## Security notes
 
