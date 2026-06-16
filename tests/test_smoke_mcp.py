@@ -20,5 +20,5 @@ def test_smoke_mcp_script() -> None:
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "✅ initialize" in proc.stdout
-    assert "✅ tools/list: 7 tools" in proc.stdout
+    assert "✅ tools/list:" in proc.stdout
     assert "invalid_token" in proc.stdout

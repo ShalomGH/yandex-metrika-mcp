@@ -1,32 +1,43 @@
 # yandex-metrika-mcp
 
-Read-only MCP server for Yandex Metrika.
+Read-only MCP server for Yandex Metrika. Small, dependency-minimal stdio wrapper around the official Yandex Metrika API. Designed for marketing analytics: a marketing agent can inspect account structure, run reports, slice by any dimension, and compare periods — all without learning the raw API.
 
-A small, dependency-minimal stdio MCP wrapper around the official Yandex Metrika API. It exposes a compact set of analytics tools suitable for Hermes Agent, Claude Desktop, Cursor, Cline, and other MCP clients.
+## Why this exists
 
-## Features
+A marketing agent usually needs:
 
-- Lists available Metrika counters.
-- Returns visits/pageviews/users/bounce-rate/duration summaries.
-- Shows traffic sources, top pages, organic search phrases, and visits over time.
-- Compares the latest period with the previous period.
-- Uses raw `httpx` calls to Yandex API — no third-party Metrika wrappers.
-- Read-only by design.
+- **Discover** what counters, goals, segments, filters, grants, and labels are available.
+- **Run reports** with arbitrary metrics, dimensions, filters, and sorts.
+- **Slice over time** (day / hour / week / month).
+- **Drill down** into a single dimension value (e.g. what pages do Chrome users land on).
+- **Compare two periods** (week vs week, month vs month, this quarter vs last).
+
+Other Yandex Metrika MCP servers either wrap every API endpoint at the cost of dozens of low-level tools and large models, or ship with the wrong auth header (`Bearer` instead of `OAuth`, which Yandex rejects). This server keeps the surface flat: **12 tools, 4 runtime dependencies, 1 auth scheme, no write access**.
 
 ## Tools
 
+### Discovery (account structure)
+
 - `list_counters` — list all counters available to the token.
-- `get_visits_summary` — visits, pageviews, users, bounce rate, average visit duration.
-- `get_traffic_sources` — top traffic sources by visits.
-- `get_top_pages` — top pages by pageviews.
-- `get_search_phrases` — organic search phrases by visits.
-- `get_visits_by_time` — visits grouped by `hour`, `day`, `week`, or `month`.
-- `compare_periods` — compare the latest period with the previous period.
+- `get_counter` — full details for a single counter.
+- `list_goals` — list goals (conversions) of a counter.
+- `list_segments` — list saved segments.
+- `list_filters` — list filters (e.g. exclude internal traffic).
+- `list_grants` — list access grants on a counter.
+- `list_labels` — list all labels in the account.
+- `list_accounts` — list accounts available to the token.
+
+### Analytics (reports)
+
+- `get_report` — arbitrary table report. `metrics`, `dimensions`, `filters`, `sort`, `date1/date2` or `days_back`, `limit`, optional `preset`.
+- `get_bytime` — same as `get_report` but grouped by `hour | day | week | month`. For time series and charts.
+- `get_drilldown` — expand a row from a parent report (e.g. drill into `ym:s:startURL` for the `chrome` browser).
+- `compare_periods` — compare two arbitrary periods, returns side-by-side totals and deltas (absolute + percent) per row.
 
 ## Requirements
 
 - Python 3.10+
-- Yandex OAuth token with Metrika read access (`metrika:read`)
+- Yandex OAuth token with `metrika:read` scope
 
 ## Install
 
@@ -50,7 +61,7 @@ uv tool install .
 export YANDEX_METRIKA_TOKEN="your-yandex-oauth-token"
 ```
 
-Yandex Metrika expects the HTTP header format `Authorization: OAuth <token>`. The server constructs that header internally; pass only the raw token in the environment variable.
+Yandex Metrika expects the HTTP header `Authorization: OAuth <token>`. The server constructs that header internally — pass only the raw token in the environment variable.
 
 ## Run
 
@@ -62,7 +73,7 @@ The server speaks MCP over stdio. Logs go to stderr; stdout is reserved for JSON
 
 ## Hermes Agent setup
 
-Recommended: use a wrapper script so the token stays outside the MCP config.
+Recommended: use a wrapper script so the token stays outside the MCP config (Hermes redacts `--env` values in `config.yaml` but passes them as the literal `***` to the subprocess, which would break the auth).
 
 ```bash
 cat > ~/.hermes/mcp-yandex-metrika-wrapper.sh <<'EOF'
@@ -83,6 +94,28 @@ Put the token in `~/.hermes/.env`:
 YANDEX_METRIKA_TOKEN=your-yandex-oauth-token
 ```
 
+## Common metric and dimension names
+
+The MCP tools accept raw Yandex Metrika metric/dimension IDs. Most-used values:
+
+**Metrics** (`ym:s:*` for session-level, `ym:pv:*` for pageview-level):
+
+- `ym:s:visits`, `ym:s:pageviews`, `ym:s:users`, `ym:s:newUsers`
+- `ym:s:bounceRate`, `ym:s:avgVisitDurationSeconds`, `ym:s:pageDepth`
+- `ym:s:goal<id>visits`, `ym:s:goal<id>conversions`, `ym:s:goal<id>conversionRate`
+- `ym:s:sumParams`, `ym:s:manGoal<id>conversionRate` (manual goals)
+
+**Dimensions:**
+
+- `ym:s:date`, `ym:s:week`, `ym:s:month`
+- `ym:s:lastTrafficSource`, `ym:s:lastSearchEngine`, `ym:s:lastSearchPhraseRoot`
+- `ym:s:searchEngine`, `ym:s:searchPhrase`
+- `ym:s:startURL`, `ym:s:endURL`, `ym:s:pageTitle`
+- `ym:s:browser`, `ym:s:browserVersion`
+- `ym:s:deviceCategory`, `ym:s:operatingSystemRoot`, `ym:s:mobilePhone`
+- `ym:s:country`, `ym:s:city`, `ym:s:region`
+- `ym:s:referer`, `ym:s:refererSource`
+
 ## Smoke test
 
 The smoke test starts the MCP server over stdio, performs `initialize`, `tools/list`, and calls `list_counters` with a fake token. A structured Yandex `invalid_token` response is expected; a Python crash is not.
@@ -95,7 +128,7 @@ Expected output includes:
 
 ```text
 ✅ initialize
-✅ tools/list: 7 tools
+✅ tools/list: 12 tools
 ✅ tools/call list_counters (fake token): { "error": "[403] ... invalid_token ..." }
 ```
 
@@ -106,6 +139,7 @@ python3 -m venv .venv
 . .venv/bin/activate
 pip install -e .[dev]
 python -m compileall src tests
+python -m pytest -q
 PYTHONPATH=src python tests/smoke_mcp.py
 ```
 

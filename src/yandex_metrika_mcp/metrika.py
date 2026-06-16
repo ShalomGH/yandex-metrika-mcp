@@ -4,18 +4,23 @@
 Документация: https://yandex.com/dev/metrika/doc/api2/quickstart/
 
 Базовый URL: https://api-metrika.yandex.net
-Аутентификация: OAuth-токен в заголовке Authorization: OAuth ***
+Аутентификация: OAuth-токен в заголовке Authorization: OAuth <token>
 
 Мы намеренно НЕ используем сторонние обёртки (tapi-yandex-metrika и т.п.) —
 только httpx, чтобы не тянуть чужие зависимости и не светить токен за пределами
 нашего процесса.
+
+Покрытие API:
+  - Management: counters, goals, segments, filters, grants, labels, accounts
+  - Reporting:  data, bytime, drilldown, comparison
+  - Запись / загрузка данных / logs API намеренно НЕ реализованы.
 """
 
 from __future__ import annotations
 
 import os
 import logging
-from typing import Any, Optional
+from typing import Any, Iterable
 
 import httpx
 
@@ -58,7 +63,7 @@ class MetrikaClient:
             headers={
                 "Authorization": f"OAuth {token}",  # Яндекс использует OAuth, не Bearer
                 "Accept": "application/json",
-                "User-Agent": "yandex-metrika-mcp/0.1.0",
+                "User-Agent": "yandex-metrika-mcp/0.2.0",
             },
             timeout=timeout,
         )
@@ -72,11 +77,11 @@ class MetrikaClient:
         method: str,
         path: str,
         *,
-        params: Optional[dict[str, Any]] = None,
-        json_body: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | list[tuple[str, Any]] | None = None,
+        json_body: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Один HTTP-запрос с простыми retry на 429/5xx."""
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(self._max_retries + 1):
             try:
                 resp = await self._client.request(
@@ -113,177 +118,203 @@ class MetrikaClient:
     # ---------- Management API ----------
 
     async def list_counters(self) -> list[dict[str, Any]]:
-        """GET /management/v1/counters — список всех счётчиков на аккаунте.
-
-        Поля ответа: counters[].id, .name, .site, .code_status, .permission
-        """
+        """GET /management/v1/counters — список всех счётчиков на аккаунте."""
         data = await self._request("GET", "/management/v1/counters")
         return data.get("counters", [])
 
+    async def get_counter(self, counter_id: int | str) -> dict[str, Any]:
+        """GET /management/v1/counter/{id} — детали счётчика."""
+        return await self._request("GET", f"/management/v1/counter/{counter_id}")
+
+    async def list_goals(self, counter_id: int | str) -> list[dict[str, Any]]:
+        """GET /management/v1/counter/{id}/goals — список целей счётчика."""
+        data = await self._request(
+            "GET", f"/management/v1/counter/{counter_id}/goals"
+        )
+        return data.get("goals", [])
+
+    async def list_segments(self, counter_id: int | str) -> list[dict[str, Any]]:
+        """GET /management/v1/counter/{id}/segments — список сегментов."""
+        data = await self._request(
+            "GET", f"/management/v1/counter/{counter_id}/segments"
+        )
+        return data.get("segments", [])
+
+    async def list_filters(self, counter_id: int | str) -> list[dict[str, Any]]:
+        """GET /management/v1/counter/{id}/filters — список фильтров."""
+        data = await self._request(
+            "GET", f"/management/v1/counter/{counter_id}/filters"
+        )
+        return data.get("filters", [])
+
+    async def list_grants(self, counter_id: int | str) -> list[dict[str, Any]]:
+        """GET /management/v1/counter/{id}/grants — права доступа к счётчику."""
+        data = await self._request(
+            "GET", f"/management/v1/counter/{counter_id}/grants"
+        )
+        return data.get("grants", [])
+
+    async def list_labels(self) -> list[dict[str, Any]]:
+        """GET /management/v1/labels — все метки аккаунта."""
+        data = await self._request("GET", "/management/v1/labels")
+        return data.get("labels", [])
+
+    async def list_accounts(self) -> list[dict[str, Any]]:
+        """GET /management/v1/accounts — список аккаунтов, к которым есть доступ."""
+        data = await self._request("GET", "/management/v1/accounts")
+        return data.get("accounts", [])
+
     # ---------- Reporting API ----------
+
+    @staticmethod
+    def _csv(value: str | Iterable[str] | None) -> str | None:
+        """Принимает строку или список строк — возвращает comma-separated или None."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return value.strip() or None
+        parts = [str(v).strip() for v in value if str(v).strip()]
+        return ",".join(parts) if parts else None
 
     async def stat_data(
         self,
         counter_id: int | str,
         *,
-        metrics: str,
-        dimensions: str | None = None,
+        metrics: str | list[str],
+        dimensions: str | list[str] | None = None,
         date1: str,
         date2: str,
         filters: str | None = None,
         sort: str | None = None,
         limit: int = 100,
-        offset: int = 1,  # API Метрики требует offset >= 1, не 0
+        offset: int = 1,
         group: str = "all",
         accuracy: str = "full",
-        quantile: float | None = None,
+        preset: str | None = None,
     ) -> dict[str, Any]:
         """GET /stat/v1/data — основной эндпоинт отчётов.
 
         Параметры — как в API Метрики:
-          metrics:    ym:s:visits,ym:s:pageviews (через запятую)
+          metrics:    ym:s:visits,ym:s:pageviews (через запятую или список)
           dimensions: ym:s:browser,ym:s:date ...
           date1/date2: YYYY-MM-DD или 'today','yesterday','7daysAgo','30daysAgo'
           filters:    ym:s:trafficSource=('organic') AND ...
           group:      day|week|month|hour|all
           accuracy:   low|full (full возвращает точные значения до 10M)
+          preset:     имя пресета из шаблонов Метрики
         """
+        m = self._csv(metrics)
+        if not m:
+            raise ValueError("metrics is required (e.g. 'ym:s:visits,ym:s:pageviews')")
         params: dict[str, Any] = {
             "id": counter_id,
-            "metrics": metrics,
+            "metrics": m,
             "date1": date1,
             "date2": date2,
-            "limit": min(max(limit, 1), 1000),
+            "limit": min(max(limit, 1), 100000),
             "offset": max(offset, 1),  # API требует offset >= 1
             "group": group,
             "accuracy": accuracy,
         }
-        if dimensions:
-            params["dimensions"] = dimensions
+        d = self._csv(dimensions)
+        if d:
+            params["dimensions"] = d
         if filters:
             params["filters"] = filters
         if sort:
             params["sort"] = sort
-        if quantile is not None:
-            params["quantile"] = quantile
-
+        if preset:
+            params["preset"] = preset
         return await self._request("GET", "/stat/v1/data", params=params)
 
-    # ---------- Удобные обёртки (читаемый API для LLM) ----------
-
-    async def get_visits(
+    async def stat_data_bytime(
         self,
         counter_id: int | str,
-        date1: str,
-        date2: str,
-    ) -> dict[str, Any]:
-        """Сводка по визитам: визиты, просмотры, посетители, отказы, время на сайте."""
-        return await self.stat_data(
-            counter_id,
-            metrics=(
-                "ym:s:visits,ym:s:pageviews,ym:s:users,"
-                "ym:s:bounceRate,ym:s:avgVisitDurationSeconds"
-            ),
-            date1=date1,
-            date2=date2,
-        )
-
-    async def get_traffic_sources(
-        self,
-        counter_id: int | str,
-        date1: str,
-        date2: str,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        """Топ источников трафика (по визитам, desc)."""
-        return await self.stat_data(
-            counter_id,
-            metrics="ym:s:visits,ym:s:users,ym:s:bounceRate",
-            dimensions="ym:s:lastTrafficSource",
-            sort="-ym:s:visits",
-            date1=date1,
-            date2=date2,
-            limit=limit,
-        )
-
-    async def get_top_pages(
-        self,
-        counter_id: int | str,
-        date1: str,
-        date2: str,
-        limit: int = 20,
-    ) -> dict[str, Any]:
-        """Топ страниц по просмотрам."""
-        return await self.stat_data(
-            counter_id,
-            metrics="ym:s:pageviews,ym:s:visits,ym:s:users",
-            dimensions="ym:s:startURL",
-            sort="-ym:s:pageviews",
-            date1=date1,
-            date2=date2,
-            limit=limit,
-        )
-
-    async def get_search_phrases(
-        self,
-        counter_id: int | str,
-        date1: str,
-        date2: str,
-        limit: int = 30,
-    ) -> dict[str, Any]:
-        """Поисковые фразы (из органического поиска)."""
-        return await self.stat_data(
-            counter_id,
-            metrics="ym:s:visits,ym:s:users",
-            dimensions="ym:s:searchPhrase",
-            filters="ym:s:trafficSource=='organic'",
-            sort="-ym:s:visits",
-            date1=date1,
-            date2=date2,
-            limit=limit,
-        )
-
-    async def get_conversions(
-        self,
-        counter_id: int | str,
-        date1: str,
-        date2: str,
-    ) -> dict[str, Any]:
-        """Конверсии по всем целям счётчика.
-
-        Возвращает rows: [ym:goal<id>, visits, conversions, conversion_rate]
-        """
-        return await self.stat_data(
-            counter_id,
-            metrics=(
-                "ym:s:visits,"
-                "ym:s:goal<goal_id>visits,"
-                "ym:s:goal<goal_id>conversions,"
-                "ym:s:goal<goal_id>conversionRate"
-            ),
-            dimensions="ym:s:date",
-            date1=date1,
-            date2=date2,
-            group="day",
-        )
-
-    async def get_visits_bytime(
-        self,
-        counter_id: int | str,
+        *,
+        metrics: str | list[str],
         date1: str,
         date2: str,
         group: str = "day",
+        dimensions: str | list[str] | None = None,
+        filters: str | None = None,
+        sort: str | None = None,
+        limit: int = 100,
     ) -> dict[str, Any]:
-        """Визиты с группировкой по времени (hour/day/week/month) — для сравнения периодов."""
-        return await self.stat_data(
-            counter_id,
-            metrics="ym:s:visits,ym:s:users,ym:s:pageviews",
-            dimensions="ym:s:date",
-            date1=date1,
-            date2=date2,
-            group=group,
-            sort="ym:s:date",
-        )
+        """GET /stat/v1/data/bytime — отчёт с группировкой по времени."""
+        m = self._csv(metrics)
+        if not m:
+            raise ValueError("metrics is required")
+        params: dict[str, Any] = {
+            "id": counter_id,
+            "metrics": m,
+            "date1": date1,
+            "date2": date2,
+            "group": group,
+            "limit": min(max(limit, 1), 100000),
+        }
+        d = self._csv(dimensions)
+        if d:
+            params["dimensions"] = d
+        if filters:
+            params["filters"] = filters
+        if sort:
+            params["sort"] = sort
+        return await self._request("GET", "/stat/v1/data/bytime", params=params)
+
+    async def stat_data_drilldown(
+        self,
+        counter_id: int | str,
+        *,
+        metrics: str | list[str],
+        dimensions: str | list[str],
+        date1: str,
+        date2: str,
+        parent_id: str | list[str] | None = None,
+        filters: str | None = None,
+        sort: str | None = None,
+        limit: int = 100,
+        offset: int = 1,
+    ) -> dict[str, Any]:
+        """GET /stat/v1/data/drilldown — раскрытие уровня по parent-значению.
+
+        parent_id: значение измерения, на котором "раскрываем" отчёт
+        (например, конкретный браузер из строки отчёта по браузерам).
+        ВАЖНО: API ожидает parent_id как массив — даже если передаём одно значение,
+        Metrika API ругается 400, если это скаляр. Метод всегда уходит как список
+        (через запятую с одним элементом = список из одного).
+        """
+        m = self._csv(metrics)
+        d = self._csv(dimensions)
+        if not m or not d:
+            raise ValueError("metrics and dimensions are required for drilldown")
+        params: dict[str, Any] = {
+            "id": counter_id,
+            "metrics": m,
+            "dimensions": d,
+            "date1": date1,
+            "date2": date2,
+            "limit": min(max(limit, 1), 100000),
+            "offset": max(offset, 1),
+        }
+        p = self._csv(parent_id)
+        # Metrika API ожидает parent_id в bracket-notation: parent_id[]=value.
+        # Иначе возвращает 400 ("Failed to convert String to List"). httpx не
+        # умеет такое из коробки — собираем URL руками.
+        if p:
+            params["__parent_id__"] = p
+        if filters:
+            params["filters"] = filters
+        if sort:
+            params["sort"] = sort
+        query_items: list[tuple[str, str]] = []
+        for k, v in params.items():
+            if k == "__parent_id__":
+                parts = [x.strip() for x in v.split(",") if x.strip()]
+                for part in parts:
+                    query_items.append(("parent_id[]", part))
+            else:
+                query_items.append((k, str(v)))
+        return await self._request("GET", "/stat/v1/data/drilldown", params=query_items)
 
 
 def get_token_from_env() -> str:
