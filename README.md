@@ -94,6 +94,22 @@ Put the token in `~/.hermes/.env`:
 YANDEX_METRIKA_TOKEN=your-yandex-oauth-token
 ```
 
+## Hermes Skill
+
+A companion skill ships in [`skills/yandex-metrika-analytics/`](skills/yandex-metrika-analytics/).
+It wraps the 12 MCP tools with an analysis pattern: resolve `counter_id` via `list_counters` first,
+pick comparable periods, decompose by source/page/device, check quality (bounce, duration, conversion),
+and present the answer in three blocks (Суть / Цифры / Что делать).
+
+Install after the MCP:
+
+```bash
+hermes skills install https://raw.githubusercontent.com/ShalomGH/yandex-metrika-mcp/main/skills/yandex-metrika-analytics/SKILL.md
+```
+
+The skill declares `metadata.hermes.requires_mcp: yandex-metrika` — Hermes will warn if the MCP
+is missing and the skill is loaded.
+
 ## Common metric and dimension names
 
 The MCP tools accept raw Yandex Metrika metric/dimension IDs. Most-used values:
